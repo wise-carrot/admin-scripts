@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+
+# Enable tab completion for readline
+bind 'set show-all-if-ambiguous on'
+
+# Define colors for better readability
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to log messages with a timestamp and color
+log() {
+    local message="$1"
+    local color="${2:-$NC}"
+    echo -e "${color}$(date +'%Y-%m-%d %H:%M:%S') - $message${NC}"
+    logger -t cron_script "$message"  # Log to system logs
+}
+
+# Function to display existing cron jobs
+list_cron_jobs() {
+    log "Displaying existing cron jobs:" "$BLUE"
+    crontab -l | nl
+}
+
+# Function to delete a cron job
+delete_cron_job() {
+    list_cron_jobs
+    read -p "Enter the number of the cron job you want to delete: " job_number
+    if [[ ! "$job_number" =~ ^[0-9]+$ ]]; then
+        log "Invalid job number." "$RED"
+        return 1
+    fi
+    crontab -l | sed "${job_number}d" | crontab -
+    if [ $? -eq 0 ]; then
+        log "Cron job number ${job_number} has been deleted." "$GREEN"
+    else
+        log "Failed to delete cron job number ${job_number}." "$RED"
+    fi
+}
+
+# Function to validate the script path
+validate_script_path() {
+    local path="$1"
+    if [ ! -f "$path" ]; then
+        log "The script path does not exist. Please enter a valid path." "$RED"
+        return 1
+    fi
+    return 0
+}
+
+# Function to validate a single cron schedule component (minute, hour, day, month, weekday)
+validate_cron_component() {
+    local component="$1"
+    local min="$2"
+    local max="$3"
+    if [[ ! "$component" =~ ^[0-9,*]+$ ]]; then
+        log "Invalid input. Please enter a valid number or use '*' for any value." "$RED"
+        return 1
+    fi
+    if [[ "$component" != "*" ]]; then
+        if (( component < min || component > max )); then
+            log "Invalid input. Please enter a number between $min and $max or use '*' for any value." "$RED"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# Generalized user input function with tab completion and validation
+get_user_input() {
+    local prompt="$1"
+    local validator="$2"
+    local min="$3"
+    local max="$4"
+    local input
+
+    while true; do
+        read -e -p "$prompt" -i "" -r input
+        if $validator "$input" "$min" "$max"; then
+            echo "$input"
+            break
+        fi
+    done
+}
+
+# Function to create a cron job
+create_cron_job() {
+    read -p "Is this a system-wide cron job? (y/n): " is_system_wide
+    if [[ "$is_system_wide" == "y" ]]; then
+        cron_file="/etc/cron.d/my_cron_job"
+        cron_user="root"
+    else
+        cron_file=$(mktemp)
+        cron_user=$(whoami)
+    fi
+
+    # Example and format prompt
+    echo -e "${YELLOW}Example: '30 2 * * *' runs the script every day at 2:30 AM.${NC}"
+    echo -e "${YELLOW}Enter the cron schedule components separately:${NC}"
+    
+    # Get minute
+    minute=$(get_user_input "Minute (0-59 or *): " validate_cron_component 0 59)
+
+    # Get hour
+    hour=$(get_user_input "Hour (0-23 or *): " validate_cron_component 0 23)
+
+    # Get day of month
+    day=$(get_user_input "Day of month (1-31 or *): " validate_cron_component 1 31)
+
+    # Get month
+    month=$(get_user_input "Month (1-12 or *): " validate_cron_component 1 12)
+
+    # Get weekday
+    weekday=$(get_user_input "Day of week (0-7 or *): " validate_cron_component 0 7)
+
+    # Get the path to the script
+    SCRIPT_PATH=$(get_user_input "Enter the full path to the script you want to schedule: " validate_script_path)
+
+    # Ask for a description of the cron job
+    read -p "Enter a description for this cron job: " CRON_DESCRIPTION
+
+    # Define the new cron job
+    NEW_CRON_JOB="${minute} ${hour} ${day} ${month} ${weekday} ${cron_user} ${SCRIPT_PATH}"
+
+    # Check if the cron job already exists
+    if crontab -l 2>/dev/null | grep -F "$NEW_CRON_JOB" >/dev/null 2>&1; then
+        log "Cron job already exists. No changes made." "$RED"
+        return 0
+    fi
+
+    # Ask for confirmation before adding the cron job
+    read -p "Are you sure you want to add this cron job? (y/n): " CONFIRMATION
+    if [[ "$CONFIRMATION" != "y" ]]; then
+        log "Cron job creation canceled." "$YELLOW"
+        return 0
+    fi
+
+    # Add the cron job with a comment for the description
+    (crontab -l 2>/dev/null; echo "# ${CRON_DESCRIPTION}"; echo "$NEW_CRON_JOB") | crontab -
+    if [ $? -eq 0 ]; then
+        log "Cron job has been created for ${SCRIPT_PATH} with the following schedule: ${minute} ${hour} ${day} ${month} ${weekday}" "$GREEN"
+    else
+        log "Failed to create the cron job. Please try again." "$RED"
+        return 1
+    fi
+}
+
+# Function to display a help message
+show_help() {
+    echo -e "${BLUE}Cron Job Management Script Help:${NC}"
+    echo "1. Create a cron job"
+    echo "   - Adds a new cron job to the system or user crontab."
+    echo "2. Delete a cron job"
+    echo "   - Deletes an existing cron job from the user crontab."
+    echo "3. Exit"
+    echo "   - Exits the script."
+    echo
+    echo -e "${BLUE}Common Mistakes:${NC}"
+    echo "1. Incorrect paths: Use absolute paths in your cron command."
+    echo "2. Missing output handling: Redirect output to a log file or /dev/null."
+    echo "3. User permissions: Ensure the user has necessary permissions."
+    echo "4. Overlapping jobs: Be cautious with frequent intervals."
+    echo
+    echo -e "${BLUE}Cron Options:${NC}"
+    echo "Minute (0-59)"
+    echo "Hour (0-23)"
+    echo "Day of the month (1-31)"
+    echo "Month (1-12)"
+    echo "Day of the week (0-6, where 0 = Sunday)"
+}
+
+# Ensure the script is not run as root
+if [ "$EUID" -eq 0 ]; then
+    log "Please do not run this script as root." "$RED"
+    exit 1
+fi
+
+# Main script to handle user actions
+while true; do
+    echo -e "${YELLOW}Please select an option:${NC}"
+    echo "1. Create a cron job"
+    echo "2. Delete a cron job"
+    echo "3. Exit"
+    echo "4. Help"
+    read -p "Enter your choice [1-4]: " action
+
+    case $action in
+        1)
+            create_cron_job
+            ;;
+        2)
+            delete_cron_job
+            ;;
+        3)
+            log "Exiting the script." "$BLUE"
+            exit 0
+            ;;
+        4)
+            show_help
+            ;;
+        *)
+            log "Invalid option. Please enter 1, 2, 3, or 4." "$RED"
+            ;;
+    esac
+done
