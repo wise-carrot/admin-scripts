@@ -113,7 +113,7 @@ create_cron_job() {
     month=$(get_user_input "Month (1-12 or *): " validate_cron_component 1 12)
 
     # Get weekday
-    weekday=$(get_user_input "Day of week (0-7 or *): " validate_cron_component 0 7)
+    weekday=$(get_user_input "Day of week (1-7 or *): " validate_cron_component 1 7)
 
     # Get the path to the script
     SCRIPT_PATH=$(get_user_input "Enter the full path to the script you want to schedule: " validate_script_path)
